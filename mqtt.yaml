@@ -1,0 +1,35 @@
+ ######################################################
+  # This is to configure the thermostat for HVAC control
+  ######################################################
+- climate:
+    name: Living room thermostat
+    unique_id: casa_de_bemo_living_room_thermostat
+    availability_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/status/LWT"
+    action_template: >-
+      {% set values = {'O':'Off', 'H1':'Stage 1 heating', 'H2':'Stage 2 heating', 'H3':'Stage 3 heating', 'C1':'Stage 1 heating', 'C2':'Stage 2 cooling', 'I':'Idle', 'F':'Fan'} %}
+      {{ values[value] if value in values.keys() else 'o' }}
+    action_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/action"
+    modes:
+      - "off"
+      - "heat"
+      - "cool"
+      - "auto"
+      - "emergency heat"
+    mode_state_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/M"
+    mode_state_template: >-
+      {% set values = { 'O':'off', 'H':'heat', 'C':'Cool', 'A':'auto', 'EH':'emergency heat'} %}
+      {{ values[value] if value in values.keys() else 'O' }}
+    mode_command_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/M/set"
+    mode_command_template: >-
+      {% set values = { 'off':'O', 'heat':'H', 'cool':'C', 'auto':'A', 'emergency heat':'EH'} %}
+      {{ values[value] if value in values.keys() else 'off' }}
+    fan_modes:
+      - auto
+      - on
+    temperature_command_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/SP/set"
+    temperature_state_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/SP"
+    current_temperature_topic: "casa_de_bemo/living_room/rcs_tr40_thermostat/T"
+    temp_step: 1
+    precision: 1
+    max_temp: 109
+    min_temp: 44
