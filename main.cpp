@@ -133,13 +133,22 @@ const char* debugMode = "casa_de_bemo/living_room/rcs_tr40_thermostat/debug";
 
 //Publish topics.  This is the data that the thermostat will present to Home Assistant
 const char* connectionTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/status/LWT";
+const char* availabilityTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/availability";
 const char* setpointHeatTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/SPH";
 const char* setpointCoolTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/SPC";
 const char* currentTempTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/T";
 const char* outsideAirTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/OA";
 const char* modeTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/M";
 const char* fanModeTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/FM";
-
+//These topics are being commented for now to try and use the action topic from the 
+//MQTT HVAC integration.
+/*
+const char* heatStage1Topic = "casa_de_bemo/living_room/rcs_tr40_thermostat/H1A";
+const char* heatStage2Topic = "casa_de_bemo/living_room/rcs_tr40_thermostat/H2A";
+const char* heatStage3Topic = "casa_de_bemo/living_room/rcs_tr40_thermostat/H3A";
+const char* coolStage1Topic = "casa_de_bemo/living_room/rcs_tr40_thermostat/C1A";
+const char* coolStage2Topic = "casa_de_bemo/living_room/rcs_tr40_thermostat/C2A";
+*/
 const char* actionTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/action";
 const char* fanStatusTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/FA";
 const char* stagingDelaysTopic = "casa_de_bemo/living_room/rcs_tr40_thermostat/SCP";
@@ -169,10 +178,15 @@ String lastSent = "";
 String command = "";
 //Counter used in place of sleep to request information at certain intervals
 int updateCounter = 0;
+int refreshCounter = 0;
 //The last outside air value received for display on the WDU
 float lastOutsideAir = 0;
 //Tell whether a command was sent or not.
 boolean commandSent = false;
+//Tells the code when to send a refresh of the received RS485 data sent from the thermostat
+boolean refresh = true;
+boolean processedR1 = false;
+boolean processedR2 = false;
 
 //Tells whether we are reconnecting to MQTT or not
 boolean reconnecting = false;
@@ -233,12 +247,18 @@ void loop() {
   // The updateCounter is used to request information at different intervals. Requesting 
   // information at different intervals helps prevent data errors on the serial transmission.
   updateCounter ++;
+  refreshCounter ++;
   
   if (updateCounter == 100000) {
     command = "R=1";
   } else if (updateCounter == 200000) {
     command = "R=2";
     updateCounter = 0;
+  }
+  //every minute we should send a data refresh
+  if (refreshCounter == 600000) {
+    refresh = true;
+    refreshCounter = 0;
   }
 
   if (command != "") {
@@ -447,6 +467,7 @@ void reconnect() {
       client.subscribe(debugMode);
 
       client.publish(connectionTopic, "Connected");
+      client.publish(availabilityTopic, "available");
       reconnectCount = 0;
       reconnecting = false;
     } else {
@@ -510,6 +531,19 @@ void parseReceived(String Message) {
     } 
     //Clear the commandSent
     commandSent = false;
+    //Check if we processed an R1 status message
+    if (command == "R=1") {
+      processedR1 = true;
+    }
+    //Check if we processed an R2 status message
+    if (command == "R=2") {
+      processedR2 = true;
+    }
+    //When on a refresh cycle we need to make sure we process both R1 and R2 status 
+    //messages before we consider the refresh complete and set the refresh to false
+    if (processedR1 && processedR2) {
+      refresh = processedR1 = processedR2 = false;
+    }
     command = "";
     println("");
     println("Response received and processed");
@@ -529,23 +563,23 @@ void parseReceived(String Message) {
 void parseStatus(String Type, String Value) {  
   if (Type == "OA") {
     //Outside Air - only publish if the value has changed
-    if (lastOutsideAir != Value.toFloat())
+    if (lastOutsideAir != Value.toFloat() || refresh)
       client.publish(outsideAirTopic, Value.c_str());
     lastOutsideAir = Value.toFloat();
   } else if (Type == "T") {
     //Current temperature - only publish if the value has changed
     println("Current temperature=" + Value);
-    if (lastTemp != Value)
+    if (lastTemp != Value || refresh)
       client.publish(currentTempTopic, Value.c_str());
     lastTemp = Value;
   } else if (Type == "SP") {
     //Set Point (for single setpoint systems)  Set the heating or cooling depending 
     //on what mode we are in
-    if (lastMode == "H" || lastMode == "EH" && lastSetpointHeat != Value) {
+    if ((lastMode == "H" || lastMode == "EH") && (lastSetpointHeat != Value || refresh)) {
       println("Single setpoint Heat=" + Value);
       client.publish(setpointHeatTopic, Value.c_str());
       lastSetpointHeat = Value;
-    } else if (lastMode == "C"&& lastSetpointCool != Value) {
+    } else if (lastMode == "C" && (lastSetpointCool != Value || refresh)) {
       println("Single setpoint cool=" + Value);
       client.publish(setpointCoolTopic, Value.c_str());
       lastSetpointCool = Value;
@@ -553,20 +587,20 @@ void parseStatus(String Type, String Value) {
   } else if (Type == "SPH") {
     //Heating set point
     println("Heating set point=" + Value);
-    if (lastSetpointHeat != Value)
+    if (lastSetpointHeat != Value || refresh)
       client.publish(setpointHeatTopic, Value.c_str());
     lastSetpointHeat = Value;
   } else if (Type == "SPC") {
     //Cooling set point
     println("Cooling set point=" + Value);
-    if (lastSetpointCool != Value)
+    if (lastSetpointCool != Value || refresh)
       client.publish(setpointCoolTopic, Value.c_str());
     lastSetpointCool = Value;
   } else if (Type == "M") {
     //RCS thermostat mode 
     println("mode=" + Value);
     println("Set energy mode to normal");
-    if (lastMode != Value) {
+    if (lastMode != Value || refresh) {
       client.publish(modeTopic, Value.c_str());
       lastMode = Value;
       if (Value == "O") {
@@ -583,7 +617,7 @@ void parseStatus(String Type, String Value) {
     }
   } else if (Type == "FM") {
     //RCS current fan mode (0=off 1=on)
-    if (lastFanMode != Value) {
+    if (lastFanMode != Value || refresh) {
       client.publish(fanModeTopic, Value.c_str());
       lastFanMode = Value;
       if (Value == "1") {
@@ -594,27 +628,27 @@ void parseStatus(String Type, String Value) {
     }
   //Type 2 status message types
   //{% set values = {'O':'Off', 'H1':'Stage 1 heating', 'H2':'Stage 2 heating', 'H3':'Stage 3 heating', 'C1':'Stage 1 heating', 'C2':'Stage 2 cooling', 'I':'Idle', 'F':'Fan'} %}
-  } else if (Type == "H1A" && Value == "1" && lastAction != "H1") {
+  } else if (Type == "H1A" && Value == "1" && (lastAction != "H1" || refresh)) {
     //RCS heating stage 1
     println("Set to heating Stage 1 Min");
     client.publish(actionTopic, "H1");
     lastAction = "H1";
-  } else if (Type == "H2A" && Value == "1" && lastAction != "H2") {
+  } else if (Type == "H2A" && Value == "1" && (lastAction != "H2" || refresh)) {
     //RCS heating stage 2
     println("Set to heating Stage 2 Normal");
     client.publish(actionTopic, "H2");
     lastAction = "H2";
-  } else if (Type == "H3A" && Value == "1" && lastAction != "H3") {
+  } else if (Type == "H3A" && Value == "1" && (lastAction != "H3" || refresh)) {
     //RCS heating stage 3
     println("Set to heating Stage 3 Max");
     client.publish(actionTopic, "H3");
     lastAction = "H3";
-  } else if (Type == "C1A" && Value == "1" && lastAction != "C1") {
+  } else if (Type == "C1A" && Value == "1" && (lastAction != "C1" || refresh)) {
     //RCS cooling stage 1
     println("Set to cooling Stage 1 Normal");
     client.publish(actionTopic, "C1");
     lastAction = "C1";
-  } else if (Type == "C2A" && Value == "1" && lastAction != "C2") {
+  } else if (Type == "C2A" && Value == "1" && (lastAction != "C2" || refresh)) {
     //RCS cooling stage 2
    println("Set to cooling Stage 2 Max");
     client.publish(actionTopic, "C2");
@@ -622,12 +656,12 @@ void parseStatus(String Type, String Value) {
   // We may receive values of 0 for both C1A and H1A we may get an on/Auto cycling if one or the 
   // other is on. To prevent this we must verify the mode we are in and only set it to auto if 
   // the heating or cooling stage with a 0 value matches the mode we are in
-  } else if (((Type == "C1A" && lastMode == "C") || (Type == "H1A" && (lastMode == "H" || lastMode == "EH"))) && Value == "0" && lastAction != "O") {
+  } else if (((Type == "C1A" && lastMode == "C") || (Type == "H1A" && (lastMode == "H" || lastMode == "EH"))) && Value == "0" && (lastAction != "O" || refresh)) {
     //send(msgFanStatus.set("Off"));
     println("Set fan status to off");
     client.publish(actionTopic, "O");
     lastAction = "O";
-  } else if (Type == "FA" && lastAction != "F") {
+  } else if (Type == "FA" && (lastAction != "F" || refresh)) {
     //RCS fan status
      //client.publish(fanStatusTopic, Value.c_str()); 
      client.publish(actionTopic, "F"); 
